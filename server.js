@@ -128,6 +128,35 @@ app.post('/api/messages', async (req, res) => {
   }
 });
 
+// ─── IronClaw proxy: /api/ironclaw → IronClaw /v1/chat/completions ──
+app.post('/api/ironclaw', async (req, res) => {
+  const authHeader = req.headers['authorization'];
+  const icUrl = req.headers['x-ic-url'];
+
+  if (!authHeader || !icUrl) {
+    return res.status(400).json({ error: 'Missing Authorization or x-ic-url header.' });
+  }
+
+  try {
+    const response = await fetch(icUrl.replace(/\/$/, '') + '/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': authHeader,
+      },
+      body: JSON.stringify(req.body),
+    });
+
+    const rawText = await response.text();
+    res.status(response.status);
+    res.setHeader('Content-Type', 'application/json');
+    res.send(rawText);
+  } catch (err) {
+    console.error('[ironclaw-proxy] Fetch error:', err.message);
+    res.status(502).json({ error: `IronClaw proxy failed: ${err.message}` });
+  }
+});
+
 // ─── 404 fallback ─────────────────────────────────────────────
 app.use((req, res) => {
   res.status(404).json({ error: `Route not found: ${req.method} ${req.path}` });
