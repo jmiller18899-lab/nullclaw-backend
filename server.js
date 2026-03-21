@@ -1,4 +1,3 @@
-
 // nullclaw REST bridge — Railway deployment
 // Supports all 14 MCP connectors via Anthropic's MCP client beta
 //
@@ -175,16 +174,7 @@ const r = await fetch("https://api.anthropic.com/v1/messages", {
   body: JSON.stringify({
     model:      session.model,
     max_tokens: 4096,
-    system: `You are nullclaw, a fully autonomous AI assistant runtime enhanced with Mission Control.
-
-You have real MCP tools connected. IMPORTANT RULES:
-
-- Always use your tools to take real actions. Never simulate or pretend.
-- When asked to send an email, actually send it via the gmail tool.
-- When asked to create a calendar event, use the gcal tool.
-- When asked to message someone on Slack, use the slack tool.
-- Confirm what you did after completing an action.
-  Active tools: ${mcpServers.map(s => s.name).join(", ") || "none configured"}.`,
+    system: `You are nullclaw, a fully autonomous AI assistant runtime enhanced with Mission Control.\n\nYou have real MCP tools connected. IMPORTANT RULES:\n\n- Always use your tools to take real actions. Never simulate or pretend.\n- When asked to send an email, actually send it via the gmail tool.\n- When asked to create a calendar event, use the gcal tool.\n- When asked to message someone on Slack, use the slack tool.\n- Confirm what you did after completing an action.\n  Active tools: ${mcpServers.map(s => s.name).join(", ") || "none configured"}.`,
     messages:    session.history,
     ...(mcpServers.length > 0 && { mcp_servers: mcpServers }),
   }),
@@ -241,20 +231,122 @@ if (!session) return res.status(401).json({ error: "Invalid token" });
 return res.json({ history: session.history, model: session.model });
 });
 
+// ═══════════════════════════════════════════════════════════
+//  SIMPLE /api/messages ENDPOINT (no pairing required)
+//  Accepts mcp_servers from frontend and passes to Anthropic
+// ═══════════════════════════════════════════════════════════
+app.post("/api/messages", async (req, res) => {
+if (!ANTHROPIC_KEY) {
+return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured on server" });
+}
+
+const { messages, model, max_tokens, system, mcp_servers } = req.body || {};
+if (!messages || !Array.isArray(messages)) {
+return res.status(400).json({ error: "Missing messages array" });
+}
+
+console.log(`[api/messages] ${messages.length} msgs, model=${model || "default"}, mcp=${(mcp_servers || []).length} servers`);
+
+try {
+// Merge frontend-provided MCP servers with server-side token-authenticated ones
+const serverMcp = getActiveMcpServers(); // from MCP_TOKEN_* env vars
+const frontendMcp = (mcp_servers || []).map(s => ({
+  type: "url",
+  url:  s.url,
+  name: s.name,
+  // If server has a token for this service, attach it
+  ...(serverMcp.find(sm => sm.name === s.name)?.authorization_token
+  ? { authorization_token: serverMcp.find(sm => sm.name === s.name).authorization_token }
+  : {}),
+}));
+
+// Deduplicate: prefer server-side (has auth tokens) over frontend-only
+const seenNames = new Set();
+const allMcp = [];
+for (const s of serverMcp) { allMcp.push(s); seenNames.add(s.name); }
+for (const s of frontendMcp) { if (!seenNames.has(s.name)) { allMcp.push(s); seenNames.add(s.name); } }
+
+const useModel = model || process.env.DEFAULT_MODEL || "claude-sonnet-4-20250514";
+const headers = {
+  "Content-Type":      "application/json",
+  "x-api-key":         ANTHROPIC_KEY,
+  "anthropic-version": "2023-06-01",
+};
+// Only add MCP beta header if we have MCP servers
+if (allMcp.length > 0) {
+  headers["anthropic-beta"] = "mcp-client-2025-04-04";
+}
+
+const body = {
+  model:      useModel,
+  max_tokens: max_tokens || 4096,
+  messages:   messages,
+};
+
+if (system) body.system = system;
+if (allMcp.length > 0) body.mcp_servers = allMcp;
+
+console.log(`[api/messages] calling Anthropic: model=${useModel}, mcp_servers=${allMcp.length} [${allMcp.map(s => s.name).join(", ")}]`);
+
+const r = await fetch("https://api.anthropic.com/v1/messages", {
+  method: "POST",
+  headers,
+  body: JSON.stringify(body),
+});
+
+const data = await r.json();
+
+if (data.error) {
+  console.error("[api/messages] Anthropic error:", data.error);
+  return res.status(r.status || 500).json({
+    error: data.error,
+    mcp_servers_sent: allMcp.map(s => s.name),
+  });
+}
+
+// Extract text from response (Anthropic resolves MCP tool loops server-side)
+const textParts = (data.content || []).filter(b => b.type === "text").map(b => b.text);
+const toolUses = (data.content || []).filter(b => b.type === "tool_use" || b.type === "mcp_tool_use");
+const toolResults = (data.content || []).filter(b => b.type === "mcp_tool_result");
+
+console.log(`[api/messages] response: ${textParts.length} text blocks, ${toolUses.length} tool calls, ${toolResults.length} tool results`);
+
+return res.json({
+  content:           data.content,
+  model:             data.model,
+  usage:             data.usage,
+  stop_reason:       data.stop_reason,
+  mcp_servers_used:  allMcp.map(s => s.name),
+  _debug: {
+    tool_calls:   toolUses.map(t => t.name || t.tool_name || "unknown"),
+    tool_results: toolResults.length,
+    text_blocks:  textParts.length,
+  },
+});
+
+} catch (err) {
+console.error("[api/messages] error:", err);
+return res.status(500).json({ error: err.message });
+}
+});
+
 // ── GET /health ──────────────────────────────────────────────
 app.get("/health", (_, res) => res.json({
-ok:           true,
-sessions:     sessions.size,
-max_history:  MAX_HISTORY,
-tools_active: getActiveMcpServers().map(s => s.name),
+ok:              true,
+version:         "2.1.0",
+sessions:        sessions.size,
+max_history:     MAX_HISTORY,
+mcp_with_tokens: getActiveMcpServers().map(s => s.name),
+mcp_registry:    MCP_REGISTRY.map(s => s.name),
+anthropic_key:   ANTHROPIC_KEY ? "configured" : "MISSING",
 }));
 
 // ── GET / (root) ─────────────────────────────────────────────
 app.get("/", (_, res) => res.json({
 name:    "nullclaw-backend",
-version: "2.0.0",
+version: "2.1.0",
 status:  "running",
-endpoints: ["/health", "/pair", "/message", "/switch-model", "/history"],
+endpoints: ["/health", "/pair", "/message", "/api/messages", "/switch-model", "/history"],
 }));
 
 // ── Start ────────────────────────────────────────────────────
