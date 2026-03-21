@@ -9,8 +9,8 @@
 // Required env vars:  ANTHROPIC_API_KEY
 // Optional env vars:  ALLOWED_ORIGIN, PORT, DEFAULT_MODEL
 
-import express from “express”;
-import cors from “cors”;
+const express = require(“express”);
+const cors = require(“cors”);
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -21,19 +21,19 @@ const DEFAULT_MODEL = process.env.DEFAULT_MODEL || “claude-sonnet-4-20250514�
 // Railway reverse proxy fix
 app.set(“trust proxy”, 1);
 
-// ── CORS ──
+// CORS
 app.use(cors({
-origin: ALLOWED_ORIGIN === “*” ? true : ALLOWED_ORIGIN.split(”,”).map(s => s.trim()),
+origin: ALLOWED_ORIGIN === “*” ? true : ALLOWED_ORIGIN.split(”,”).map(function(s) { return s.trim(); }),
 methods: [“GET”, “POST”, “OPTIONS”],
 allowedHeaders: [“Content-Type”, “Authorization”],
 }));
 app.use(express.json({ limit: “2mb” }));
 
-// ── Simple rate limiter (no external deps) ──
+// Simple rate limiter (no external deps)
 const rateMap = new Map();
 const RATE_WINDOW = 60000;
 const RATE_MAX = 30;
-app.use((req, res, next) => {
+app.use(function(req, res, next) {
 const ip = req.ip || “unknown”;
 const now = Date.now();
 const entry = rateMap.get(ip);
@@ -44,12 +44,12 @@ return next();
 if (++entry.count > RATE_MAX) return res.status(429).json({ error: “Rate limited” });
 next();
 });
-setInterval(() => {
+setInterval(function() {
 const cutoff = Date.now() - RATE_WINDOW;
-for (const [ip, e] of rateMap) if (e.start < cutoff) rateMap.delete(ip);
+for (const [ip, e] of rateMap) { if (e.start < cutoff) rateMap.delete(ip); }
 }, 300000);
 
-// ── MCP tool descriptions for system prompt injection ──
+// MCP tool descriptions for system prompt injection — all 19 connectors
 const MCP_DESCRIPTIONS = {
 gmail:       “gmail — Send emails, read inbox, create drafts, search messages. Use when asked to email anyone.”,
 gcal:        “gcal — Read calendar events, create events, check availability. Use for scheduling or calendar questions.”,
@@ -74,32 +74,26 @@ ralphloop:   “ralphloop — Autonomous iterative loop: plan, implement, test, 
 
 function buildMcpSystemBlock(mcpList) {
 if (!mcpList || mcpList.length === 0) return “”;
-return `
-
-## YOUR MCP TOOLS — ACTIVE AND READY
-
-You have ${mcpList.length} real MCP (Model Context Protocol) server tools connected. These are NOT simulated. When you invoke them, real actions happen.
-
-Connected: ${mcpList.map(s => s.name).join(”, “)}
-
-Tool reference:
-${mcpList.map(s => “- “ + (MCP_DESCRIPTIONS[s.name] || `${s.name} — MCP tool at ${s.url}`)).join(”\n”)}
-
-RULES:
-
-1. When the user asks you to do something that matches a tool, ALWAYS invoke it. Never say “I would” — actually do it.
-1. Never simulate. Tool calls trigger real actions.
-1. If a tool fails, report the actual error.
-1. After a tool action, confirm exactly what happened with specifics.
-1. Use tools before answering from general knowledge when relevant.
-1. Chain multiple tool calls if needed to fulfill the request.
-   `;
-   }
+var lines = mcpList.map(function(s) {
+return “- “ + (MCP_DESCRIPTIONS[s.name] || (s.name + “ — MCP tool at “ + s.url));
+});
+return “\n\n## YOUR MCP TOOLS — ACTIVE AND READY\n” +
+“You have “ + mcpList.length + “ real MCP (Model Context Protocol) server tools connected. These are NOT simulated. When you invoke them, real actions happen.\n\n” +
+“Connected: “ + mcpList.map(function(s) { return s.name; }).join(”, “) + “\n\n” +
+“Tool reference:\n” + lines.join(”\n”) + “\n\n” +
+“RULES:\n” +
+“1. When the user asks you to do something that matches a tool, ALWAYS invoke it. Never say "I would" — actually do it.\n” +
+“2. Never simulate. Tool calls trigger real actions.\n” +
+“3. If a tool fails, report the actual error.\n” +
+“4. After a tool action, confirm exactly what happened with specifics.\n” +
+“5. Use tools before answering from general knowledge when relevant.\n” +
+“6. Chain multiple tool calls if needed to fulfill the request.\n”;
+}
 
 // ═══════════════════════════════════════════════════════
 //  POST /api/messages — Main proxy endpoint with MCP
 // ═══════════════════════════════════════════════════════
-app.post(”/api/messages”, async (req, res) => {
+app.post(”/api/messages”, async function(req, res) {
 if (!ANTHROPIC_KEY) {
 return res.status(500).json({ error: “ANTHROPIC_API_KEY not configured” });
 }
@@ -109,11 +103,9 @@ if (!messages || !Array.isArray(messages)) {
 return res.status(400).json({ error: “Missing messages array” });
 }
 
-const mcpList = (mcp_servers || []).map(s => ({
-type: “url”,
-url: s.url,
-name: s.name,
-}));
+const mcpList = (mcp_servers || []).map(function(s) {
+return { type: “url”, url: s.url, name: s.name };
+});
 
 const useModel = model || DEFAULT_MODEL;
 
@@ -135,17 +127,17 @@ const finalSystem = (system || “”) + mcpBlock;
 const body = {
 model: useModel,
 max_tokens: max_tokens || 4096,
-messages,
+messages: messages,
 };
 if (finalSystem) body.system = finalSystem;
 if (mcpList.length > 0) body.mcp_servers = mcpList;
 
-console.log(`[api/messages] ${messages.length} msgs, model=${useModel}, mcp=${mcpList.length} [${mcpList.map(s => s.name).join(",")}]`);
+console.log(”[api/messages] “ + messages.length + “ msgs, model=” + useModel + “, mcp=” + mcpList.length + “ [” + mcpList.map(function(s) { return s.name; }).join(”,”) + “]”);
 
 try {
 const r = await fetch(“https://api.anthropic.com/v1/messages”, {
 method: “POST”,
-headers,
+headers: headers,
 body: JSON.stringify(body),
 });
 
@@ -156,25 +148,25 @@ if (data.error) {
   console.error("[api/messages] Anthropic error:", data.error);
   return res.status(r.status || 500).json({
     error: data.error,
-    mcp_servers_sent: mcpList.map(s => s.name),
+    mcp_servers_sent: mcpList.map(function(s) { return s.name; }),
   });
 }
 
 // Parse response
-const textParts = (data.content || []).filter(b => b.type === "text").map(b => b.text);
-const toolUses = (data.content || []).filter(b => b.type === "tool_use" || b.type === "mcp_tool_use");
-const toolResults = (data.content || []).filter(b => b.type === "mcp_tool_result");
+const textParts = (data.content || []).filter(function(b) { return b.type === "text"; }).map(function(b) { return b.text; });
+const toolUses = (data.content || []).filter(function(b) { return b.type === "tool_use" || b.type === "mcp_tool_use"; });
+const toolResults = (data.content || []).filter(function(b) { return b.type === "mcp_tool_result"; });
 
-console.log(`[api/messages] response: ${textParts.length} text, ${toolUses.length} tool calls, ${toolResults.length} tool results`);
+console.log("[api/messages] response: " + textParts.length + " text, " + toolUses.length + " tool calls, " + toolResults.length + " tool results");
 
 return res.json({
   content: data.content,
   model: data.model,
   usage: data.usage,
   stop_reason: data.stop_reason,
-  mcp_servers_used: mcpList.map(s => s.name),
+  mcp_servers_used: mcpList.map(function(s) { return s.name; }),
   _debug: {
-    tool_calls: toolUses.map(t => t.name || t.tool_name || "unknown"),
+    tool_calls: toolUses.map(function(t) { return t.name || t.tool_name || "unknown"; }),
     tool_results: toolResults.length,
     text_blocks: textParts.length,
   },
@@ -187,17 +179,20 @@ return res.status(500).json({ error: err.message });
 }
 });
 
-// ── GET /health ──
-app.get(”/health”, (_, res) => res.json({
+// GET /health
+app.get(”/health”, function(req, res) {
+res.json({
 status: “ok”,
 version: “3.0.0”,
 anthropic_key: ANTHROPIC_KEY ? “configured” : “MISSING”,
 mcp_support: true,
 mcp_beta: “mcp-client-2025-04-04”,
-}));
+});
+});
 
-// ── GET / ──
-app.get(”/”, (_, res) => res.json({
+// GET /
+app.get(”/”, function(req, res) {
+res.json({
 service: “NullClaw Mission Control Proxy”,
 version: “3.0.0”,
 endpoints: {
@@ -205,12 +200,13 @@ health: “GET /health”,
 messages: “POST /api/messages”,
 },
 mcp_support: true,
-}));
+});
+});
 
-// ── Start ──
-app.listen(PORT, () => {
-console.log(`[nullclaw-proxy] v3.0.0 running on port ${PORT}`);
-console.log(`[nullclaw-proxy] ALLOWED_ORIGIN: ${ALLOWED_ORIGIN}`);
-console.log(`[nullclaw-proxy] MCP beta: mcp-client-2025-04-04`);
-console.log(`[nullclaw-proxy] ANTHROPIC_API_KEY: ${ANTHROPIC_KEY ? "set" : "MISSING"}`);
+// Start
+app.listen(PORT, function() {
+console.log(”[nullclaw-proxy] v3.0.0 running on port “ + PORT);
+console.log(”[nullclaw-proxy] ALLOWED_ORIGIN: “ + ALLOWED_ORIGIN);
+console.log(”[nullclaw-proxy] MCP beta: mcp-client-2025-04-04”);
+console.log(”[nullclaw-proxy] ANTHROPIC_API_KEY: “ + (ANTHROPIC_KEY ? “set” : “MISSING”));
 });
