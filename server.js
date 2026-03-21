@@ -1,39 +1,41 @@
-// NullClaw Mission Control Proxy v3.0.0
+// NullClaw Mission Control Proxy v3.0.0 code
 
 const express = require('express');
-const cors = require('cors');
-const rateLimit = require('express-rate-limit');
+const http = require('http');
+const WebSocket = require('ws');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
 
-// CORS configuration
-app.use(cors());
+app.use(express.json());
 
-// Rate limiting configuration
-const limiter = rateLimit({
-    windowMs: 1 * 60 * 1000, // 1 minute
-    max: 100, // Limit each IP to 100 requests per windowMs
-});
-app.use(limiter);
-
-// Main endpoint
+// Your API endpoints go here
 app.get('/', (req, res) => {
-    res.send('Welcome to NullClaw Mission Control Proxy!');
+    res.send('Hello from NullClaw Mission Control Proxy!');
 });
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-    res.status(200).json({ status: 'OK' });
+wss.on('connection', (ws) => {
+    console.log('New client connected');
+    ws.on('message', (message) => {
+        console.log('Received:', message);
+        ws.send(`Echo: ${message}`);
+    });
+    ws.on('close', () => {
+        console.log('Client disconnected');
+    });
 });
 
-// Messages API endpoint
-app.post('/api/messages', (req, res) => {
-    const message = req.body.message;
-    // Handle the message as needed
-    res.status(200).send(`Message received: ${message}`);
+// Handle shutdown gracefully
+process.on('SIGINT', () => {
+    console.log('Shutting down...');
+    server.close(() => {
+        console.log('Server closed');
+        process.exit(0);
+    });
 });
 
-app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`Server started on port ${PORT}`);
 });
