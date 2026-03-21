@@ -1,6 +1,6 @@
 // nullclaw REST bridge — Railway deployment
 // Supports all 14 MCP connectors via Anthropic's MCP client beta
-//
+
 // Required env vars:
 //   PAIRING_CODE, ANTHROPIC_API_KEY
 //
@@ -115,6 +115,47 @@ if (entry.start < cutoff) rateLimitMap.delete(ip);
 // ── Helpers ──────────────────────────────────────────────────
 const makeToken = () => crypto.randomBytes(24).toString("hex");
 
+// Build MCP tool awareness block for system prompts
+function buildMcpSystemBlock(mcpList) {
+if (!mcpList || mcpList.length === 0) return "";
+const descriptions = {
+gmail: "gmail — Send emails, read inbox, create drafts, search messages. Use when asked to email anyone.",
+gcal: "gcal — Read calendar events, create events, check availability. Use for scheduling or calendar questions.",
+slack: "slack — Send messages to channels, read channels, search. Use when asked to post to or read Slack.",
+notion: "notion — Create pages, search databases, read content. Use for Notion workspace tasks.",
+canva: "canva — Create designs, search designs, manage brand kits. Use for design tasks.",
+vercel: "vercel — Check deployments, get project info, manage domains. Use for deployment status.",
+supabase: "supabase — Run SQL queries, manage databases, list tables. Use for database operations.",
+linear: "linear — Create issues, search tickets, manage projects. Use for issue tracking.",
+hubspot: "hubspot — Manage contacts, deals, CRM data. Use for CRM operations.",
+cloudflare: "cloudflare — Manage Workers, KV, R2, DNS. Use for edge/infrastructure tasks.",
+etlify: "netlify — Deploy sites, manage builds. Use for Netlify deployments.",
+context7: "context7 — Look up live documentation for libraries and APIs. Use before implementing with external libraries.",
+indeed: "indeed — Search jobs, get company data, manage resumes. Use for job-related queries.",
+clawdy: "clawdy — Custom Clawdy Cloud operations.",
+};
+return `
+
+## YOUR MCP TOOLS — ACTIVE AND READY
+
+You have ${mcpList.length} real MCP (Model Context Protocol) server tools connected. These are NOT simulated. When you invoke them, real actions happen in the real world.
+
+Connected tools: ${mcpList.map(s => s.name).join(", ")}
+
+Tool reference:
+${mcpList.map(s => "- " + (descriptions[s.name] || `${s.name} — MCP tool at ${s.url}`)).join("\n")}
+
+CRITICAL RULES:
+
+1. When the user asks you to do something that matches a tool, ALWAYS invoke it. Never say "I would do X" — actually do it.
+1. Never simulate or pretend. Tool calls trigger real actions.
+1. If a tool call fails, report the actual error honestly.
+1. After completing a tool action, confirm exactly what happened with specifics.
+1. If the user asks about something and a relevant tool exists, use the tool first rather than answering from general knowledge.
+1. You may need to call tools multiple times or chain tool calls to fulfill a request.
+   `;
+}
+
 function getSession(req) {
 const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
 const session = token ? sessions.get(token) ?? null : null;
@@ -174,7 +215,7 @@ const r = await fetch("https://api.anthropic.com/v1/messages", {
   body: JSON.stringify({
     model:      session.model,
     max_tokens: 4096,
-    system: `You are nullclaw, a fully autonomous AI assistant runtime enhanced with Mission Control.\n\nYou have real MCP tools connected. IMPORTANT RULES:\n\n- Always use your tools to take real actions. Never simulate or pretend.\n- When asked to send an email, actually send it via the gmail tool.\n- When asked to create a calendar event, use the gcal tool.\n- When asked to message someone on Slack, use the slack tool.\n- Confirm what you did after completing an action.\n  Active tools: ${mcpServers.map(s => s.name).join(", ") || "none configured"}.`,
+    system: `You are nullclaw, a fully autonomous AI assistant runtime enhanced with Mission Control.` + buildMcpSystemBlock(mcpServers),
     messages:    session.history,
     ...(mcpServers.length > 0 && { mcp_servers: mcpServers }),
   }),
@@ -251,13 +292,13 @@ try {
 // Merge frontend-provided MCP servers with server-side token-authenticated ones
 const serverMcp = getActiveMcpServers(); // from MCP_TOKEN_* env vars
 const frontendMcp = (mcp_servers || []).map(s => ({
-  type: "url",
-  url:  s.url,
-  name: s.name,
-  // If server has a token for this service, attach it
-  ...(serverMcp.find(sm => sm.name === s.name)?.authorization_token
-  ? { authorization_token: serverMcp.find(sm => sm.name === s.name).authorization_token }
-  : {}),
+type: "url",
+url:  s.url,
+name: s.name,
+// If server has a token for this service, attach it
+…(serverMcp.find(sm => sm.name === s.name)?.authorization_token
+? { authorization_token: serverMcp.find(sm => sm.name === s.name).authorization_token }
+: {}),
 }));
 
 // Deduplicate: prefer server-side (has auth tokens) over frontend-only
@@ -283,7 +324,10 @@ const body = {
   messages:   messages,
 };
 
-if (system) body.system = system;
+// Build enhanced system prompt with MCP tool awareness
+const mcpBlock = buildMcpSystemBlock(allMcp);
+const finalSystem = (system || "") + mcpBlock;
+if (finalSystem) body.system = finalSystem;
 if (allMcp.length > 0) body.mcp_servers = allMcp;
 
 console.log(`[api/messages] calling Anthropic: model=${useModel}, mcp_servers=${allMcp.length} [${allMcp.map(s => s.name).join(", ")}]`);
