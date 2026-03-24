@@ -156,6 +156,7 @@ return res.json({ access_token: token });
 });
 
 // ── POST /message ────────────────────────────────────────────
+// Routes to Hermes Agent when HERMES_API_URL is set, otherwise falls back to Anthropic.
 app.post("/message", async (req, res) => {
 const session = getSession(req);
 if (!session) return res.status(401).json({ error: "Invalid or expired token" });
@@ -163,29 +164,51 @@ if (!session) return res.status(401).json({ error: "Invalid or expired token" })
 const { content } = req.body || {};
 if (!content) return res.status(400).json({ error: "Missing content" });
 
-console.log(`[message] ${session.session_id}: ${content.slice(0, 80)}`);
-
-if (!ANTHROPIC_KEY) {
-return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured on server" });
-}
+console.log(`[message:${HERMES_API_URL ? "hermes" : "anthropic"}] ${session.session_id}: ${content.slice(0, 80)}`);
 
 session.history.push({ role: "user", content });
 
 try {
-const mcpServers = getActiveMcpServers();
+  let reply;
+  let tools_active;
 
-const r = await fetch("https://api.anthropic.com/v1/messages", {
-  method: "POST",
-  headers: {
-    "Content-Type":      "application/json",
-    "x-api-key":         ANTHROPIC_KEY,
-    "anthropic-version": "2023-06-01",
-    "anthropic-beta":    "mcp-client-2025-04-04",
-  },
-  body: JSON.stringify({
-    model:      session.model,
-    max_tokens: 4096,
-    system: `You are nullclaw, a fully autonomous AI assistant runtime enhanced with Mission Control.
+  if (HERMES_API_URL) {
+    // ── Hermes Agent (primary) ──────────────────────────────
+    const r = await fetch(`${HERMES_API_URL}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type":  "application/json",
+        "Authorization": `Bearer ${HERMES_API_KEY}`,
+      },
+      body: JSON.stringify({
+        messages: session.history,
+        model:    session.model,
+      }),
+    });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error.message || JSON.stringify(d.error));
+    reply       = d.choices?.[0]?.message?.content || "Done.";
+    tools_active = ["hermes"];
+
+  } else {
+    // ── Anthropic API (fallback) ────────────────────────────
+    if (!ANTHROPIC_KEY) {
+      session.history.pop();
+      return res.status(500).json({ error: "Neither HERMES_API_URL nor ANTHROPIC_API_KEY is configured" });
+    }
+    const mcpServers = getActiveMcpServers();
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type":      "application/json",
+        "x-api-key":         ANTHROPIC_KEY,
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta":    "mcp-client-2025-04-04",
+      },
+      body: JSON.stringify({
+        model:      session.model,
+        max_tokens: 4096,
+        system: `You are nullclaw, a fully autonomous AI assistant runtime enhanced with Mission Control.
 
 You have real MCP tools connected. IMPORTANT RULES:
 
@@ -195,29 +218,25 @@ You have real MCP tools connected. IMPORTANT RULES:
 - When asked to message someone on Slack, use the slack tool.
 - Confirm what you did after completing an action.
   Active tools: ${mcpServers.map(s => s.name).join(", ") || "none configured"}.`,
-    messages:    session.history,
-    ...(mcpServers.length > 0 && { mcp_servers: mcpServers }),
-  }),
-});
+        messages:    session.history,
+        ...(mcpServers.length > 0 && { mcp_servers: mcpServers }),
+      }),
+    });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error.message || JSON.stringify(d.error));
+    reply       = d.content?.filter(b => b.type === "text").map(b => b.text).join("\n") || "Done.";
+    tools_active = mcpServers.map(s => s.name);
+  }
 
-const d = await r.json();
-if (d.error) throw new Error(d.error.message || JSON.stringify(d.error));
+  session.history.push({ role: "assistant", content: reply });
+  session.history = trimHistory(session.history);
 
-// Extract text reply — Anthropic resolves the full MCP tool loop before returning
-const reply = d.content
-  ?.filter(b => b.type === "text")
-  .map(b => b.text)
-  .join("\n")
-  || "Done.";
-
-session.history.push({ role: "assistant", content: reply });
-session.history = trimHistory(session.history);
-
-return res.json({
-  content: reply,
-  history_length: session.history.length,
-  tools_active: mcpServers.map(s => s.name),
-});
+  return res.json({
+    content: reply,
+    history_length: session.history.length,
+    tools_active,
+    backend: HERMES_API_URL ? "hermes" : "anthropic",
+  });
 
 } catch (err) {
   console.error("[message] error:", err);
@@ -252,26 +271,24 @@ return res.json({ history: session.history, model: session.model });
 });
 
 // ── POST /api/hermes ─────────────────────────────────────────
-// Proxy to a running Hermes Agent API server.
-// Body: { message: string, session_id?: string }
+// Direct proxy to Hermes /v1/chat/completions (OpenAI-compatible).
+// Body: { messages: [{role, content}], model?: string }
 // Requires HERMES_API_URL and HERMES_API_KEY env vars.
 app.post("/api/hermes", async (req, res) => {
 if (!HERMES_API_URL) {
   return res.status(503).json({ error: "HERMES_API_URL not configured" });
 }
-const { message, session_id } = req.body || {};
-if (!message) return res.status(400).json({ error: "Missing message" });
-
-console.log(`[hermes] ${session_id || "anon"}: ${String(message).slice(0, 80)}`);
+const { messages, model } = req.body || {};
+if (!messages?.length) return res.status(400).json({ error: "Missing messages array" });
 
 try {
-  const r = await fetch(`${HERMES_API_URL}/message`, {
+  const r = await fetch(`${HERMES_API_URL}/v1/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type":  "application/json",
       "Authorization": `Bearer ${HERMES_API_KEY}`,
     },
-    body: JSON.stringify({ message, session_id }),
+    body: JSON.stringify({ messages, model }),
   });
   const data = await r.json();
   return res.status(r.status).json(data);
