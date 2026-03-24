@@ -14,6 +14,10 @@
 //   MCP_TOKEN_HUBSPOT, MCP_TOKEN_LINEAR, MCP_TOKEN_CLOUDFLARE
 //   MCP_TOKEN_NETLIFY, MCP_TOKEN_CONTEXT7, MCP_TOKEN_INDEED
 //   MCP_TOKEN_CLAWDY
+//
+// Hermes Agent connector (optional):
+//   HERMES_API_URL  — base URL of the Hermes API server (e.g. http://localhost:8765)
+//   HERMES_API_KEY  — matches Hermes API_SERVER_KEY env var
 
 import express from "express";
 import cors from "cors";
@@ -32,6 +36,12 @@ const PAIRING_CODE  = process.env.PAIRING_CODE     || "123456";
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
 const MAX_HISTORY   = parseInt(process.env.MAX_HISTORY || "40");
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || "*";
+
+// ── Hermes Agent connection ───────────────────────────────────
+// Set HERMES_API_URL to your running Hermes API server (API_SERVER_HOST:API_SERVER_PORT)
+// Set HERMES_API_KEY to your Hermes API_SERVER_KEY
+const HERMES_API_URL = (process.env.HERMES_API_URL || "").replace(/\/$/, "");
+const HERMES_API_KEY = process.env.HERMES_API_KEY || "";
 
 // ── MCP server registry ──────────────────────────────────────
 // Each entry: { name, url, envKey }
@@ -241,20 +251,69 @@ if (!session) return res.status(401).json({ error: "Invalid token" });
 return res.json({ history: session.history, model: session.model });
 });
 
+// ── POST /api/hermes ─────────────────────────────────────────
+// Proxy to a running Hermes Agent API server.
+// Body: { message: string, session_id?: string }
+// Requires HERMES_API_URL and HERMES_API_KEY env vars.
+app.post("/api/hermes", async (req, res) => {
+if (!HERMES_API_URL) {
+  return res.status(503).json({ error: "HERMES_API_URL not configured" });
+}
+const { message, session_id } = req.body || {};
+if (!message) return res.status(400).json({ error: "Missing message" });
+
+console.log(`[hermes] ${session_id || "anon"}: ${String(message).slice(0, 80)}`);
+
+try {
+  const r = await fetch(`${HERMES_API_URL}/message`, {
+    method: "POST",
+    headers: {
+      "Content-Type":  "application/json",
+      "Authorization": `Bearer ${HERMES_API_KEY}`,
+    },
+    body: JSON.stringify({ message, session_id }),
+  });
+  const data = await r.json();
+  return res.status(r.status).json(data);
+} catch (err) {
+  console.error("[hermes] error:", err);
+  return res.status(502).json({ error: "Hermes unreachable: " + err.message });
+}
+});
+
+// ── GET /api/hermes/health ────────────────────────────────────
+// Ping the Hermes API server and return its status.
+app.get("/api/hermes/health", async (_, res) => {
+if (!HERMES_API_URL) {
+  return res.json({ connected: false, reason: "HERMES_API_URL not configured" });
+}
+try {
+  const r = await fetch(`${HERMES_API_URL}/health`, {
+    headers: { "Authorization": `Bearer ${HERMES_API_KEY}` },
+    signal: AbortSignal.timeout(5000),
+  });
+  const data = await r.json().catch(() => ({}));
+  return res.json({ connected: r.ok, status: r.status, ...data });
+} catch (err) {
+  return res.json({ connected: false, reason: err.message });
+}
+});
+
 // ── GET /health ──────────────────────────────────────────────
 app.get("/health", (_, res) => res.json({
 ok:           true,
 sessions:     sessions.size,
 max_history:  MAX_HISTORY,
 tools_active: getActiveMcpServers().map(s => s.name),
+hermes:       HERMES_API_URL ? { url: HERMES_API_URL, configured: true } : { configured: false },
 }));
 
 // ── GET / (root) ─────────────────────────────────────────────
 app.get("/", (_, res) => res.json({
 name:    "nullclaw-backend",
-version: "2.0.0",
+version: "2.1.0",
 status:  "running",
-endpoints: ["/health", "/pair", "/message", "/switch-model", "/history"],
+endpoints: ["/health", "/pair", "/message", "/switch-model", "/history", "/api/hermes", "/api/hermes/health"],
 }));
 
 // ── Start ────────────────────────────────────────────────────
@@ -263,4 +322,5 @@ const active = getActiveMcpServers().map(s => s.name);
 console.log(`[nullclaw-proxy] Running on port ${PORT}`);
 console.log(`[nullclaw-proxy] ALLOWED_ORIGIN: ${ALLOWED_ORIGIN}`);
 console.log(`[nullclaw-proxy] active MCP tools: ${active.length ? active.join(", ") : "none — set MCP_TOKEN_* env vars"}`);
+console.log(`[nullclaw-proxy] Hermes Agent: ${HERMES_API_URL || "not configured (set HERMES_API_URL)"}`);
 });
