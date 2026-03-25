@@ -1,6 +1,8 @@
 // NullClaw Mission Control Proxy v3.1.0
 import express from "express";
 import cors from "cors";
+import { fileURLToPath } from "url";
+import { join, dirname } from "path";
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -189,6 +191,9 @@ app.post("/api/relay", async (req, res) => {
 // ═══════════════════════════════════════════════════════
 //  GET endpoints
 // ═══════════════════════════════════════════════════════
+const __dirname = dirname(fileURLToPath(import.meta.url));
+app.get("/app", (_, res) => res.sendFile(join(__dirname, "client", "artifact.html")));
+
 app.get("/health", (_, res) => res.json({
   status: "ok", version: "3.1.0",
   anthropic_key: ANTHROPIC_KEY ? "configured" : "MISSING",
@@ -199,6 +204,7 @@ app.get("/health", (_, res) => res.json({
 app.get("/", (_, res) => res.json({
   service: "NullClaw Mission Control Proxy", version: "3.1.0",
   endpoints: {
+    app: "GET /app — Mission Control UI",
     health: "GET /health",
     messages: "POST /api/messages — Frontend chat with MCP (client sends connectors)",
     task: "POST /api/task — AI Studio passthrough (auto-includes all 19 MCP connectors)",

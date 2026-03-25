@@ -93,7 +93,7 @@
     }
 
     function readProxy() {
-      try { return localStorage.getItem("nullclaw_proxy_url") || ""; } catch { return ""; }
+      try { return localStorage.getItem("nullclaw_proxy_url") || window.location.origin; } catch { return ""; }
     }
     function writeProxy(v) {
       try { localStorage.setItem("nullclaw_proxy_url", v); } catch {}
