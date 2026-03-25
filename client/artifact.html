@@ -93,7 +93,7 @@
     }
 
     function readProxy() {
-      try { return localStorage.getItem("nullclaw_proxy_url") || window.location.origin; } catch { return ""; }
+      try { return localStorage.getItem("nullclaw_proxy_url") || ""; } catch { return ""; }
     }
     function writeProxy(v) {
       try { localStorage.setItem("nullclaw_proxy_url", v); } catch {}
@@ -276,7 +276,7 @@
       const [selectedAgent, setSelectedAgent] = useState("chief");
       const [model, setModel] = useState(MODELS[0]);
       const [proxyUrl, setProxyUrl] = useState(readProxy);
-      const [showSettings, setShowSettings] = useState(false);
+      const [showSettings, setShowSettings] = useState(() => !readProxy());
       const [systemPrompt, setSystemPrompt] = useState("");
       const bottomRef = useRef(null);
       const textareaRef = useRef(null);
@@ -512,35 +512,83 @@
                     display: "flex", flexDirection: "column", alignItems: "center",
                     justifyContent: "center", height: "100%", color: "#40405a", textAlign: "center",
                   }}>
-                    <div style={{
-                      width: 56, height: 56, borderRadius: 16, marginBottom: 16,
-                      background: "linear-gradient(135deg, #1a0a3e, #0a0a20)",
-                      border: "1px solid #2a1a5e",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                    }}>
-                      <Icon name="Zap" size={28} color="#3b1f6b" />
-                    </div>
-                    <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8, color: "#606080" }}>
-                      {tab === "chat" ? "Start a conversation" : "Send a task"}
-                    </div>
-                    <div style={{ fontSize: 13, maxWidth: 300, lineHeight: 1.6 }}>
-                      {tab === "chat"
-                        ? "Select MCP connectors in the sidebar, then type your message below."
-                        : "Choose an agent, then describe what you need done."}
-                    </div>
-                    {tab === "task" && (
-                      <div style={{ marginTop: 10, fontSize: 12, color: "#2a2a3a" }}>
-                        Tasks automatically use all 19 MCP connectors.
+                    {!proxyUrl ? (
+                      // ── First-run setup prompt ──
+                      <div style={{ maxWidth: 380, width: "100%" }}>
+                        <div style={{
+                          width: 56, height: 56, borderRadius: 16, marginBottom: 16, margin: "0 auto 16px",
+                          background: "linear-gradient(135deg, #1a0a3e, #0a0a20)",
+                          border: "1px solid #2a1a5e",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                        }}>
+                          <Icon name="Zap" size={28} color="#7c3aed" />
+                        </div>
+                        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6, color: "#c4b5fd" }}>
+                          Connect to your proxy
+                        </div>
+                        <div style={{ fontSize: 13, color: "#606080", marginBottom: 20, lineHeight: 1.6 }}>
+                          Enter your Railway backend URL in the Settings panel on the left to get started.
+                        </div>
+                        <div style={{
+                          background: "#0f0f1e", border: "1px solid #2a2a3e",
+                          borderRadius: 10, padding: 16, textAlign: "left",
+                        }}>
+                          <div style={{ fontSize: 11, color: "#7c3aed", fontWeight: 700, marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                            Setup steps
+                          </div>
+                          {[
+                            ["1", "Deploy backend", "Push this repo to Railway. Copy the generated URL."],
+                            ["2", "Set proxy URL", "Open ⚙ Settings → paste your Railway URL → Save."],
+                            ["3", "Add MCP tokens", "Enable connectors in the sidebar and paste their Bearer tokens."],
+                            ["4", "Start chatting", "Use Chat for selective MCP, or Task for all 19 connectors + agents."],
+                          ].map(([n, title, desc]) => (
+                            <div key={n} style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+                              <div style={{
+                                width: 20, height: 20, borderRadius: "50%", background: "#1a1a2e",
+                                border: "1px solid #7c3aed55", color: "#7c3aed",
+                                fontSize: 11, fontWeight: 700, flexShrink: 0,
+                                display: "flex", alignItems: "center", justifyContent: "center",
+                              }}>{n}</div>
+                              <div>
+                                <div style={{ fontSize: 12, color: "#a0a0c0", fontWeight: 600 }}>{title}</div>
+                                <div style={{ fontSize: 11, color: "#505068", marginTop: 1 }}>{desc}</div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        <button onClick={() => setShowSettings(true)} style={{
+                          marginTop: 16, padding: "9px 24px", background: "#7c3aed",
+                          border: "none", borderRadius: 8, color: "white",
+                          fontSize: 13, fontWeight: 600, cursor: "pointer",
+                        }}>
+                          Open Settings
+                        </button>
                       </div>
-                    )}
-                    {!proxyUrl && (
-                      <div style={{
-                        marginTop: 16, padding: "10px 14px", borderRadius: 8,
-                        background: "#1a0a0a", border: "1px solid #5a1a1a",
-                        fontSize: 12, color: "#f87171", maxWidth: 280,
-                      }}>
-                        ⚠ No proxy URL set. Open Settings and paste your Railway URL.
-                      </div>
+                    ) : (
+                      // ── Ready state ──
+                      <>
+                        <div style={{
+                          width: 56, height: 56, borderRadius: 16, marginBottom: 16,
+                          background: "linear-gradient(135deg, #1a0a3e, #0a0a20)",
+                          border: "1px solid #2a1a5e",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                        }}>
+                          <Icon name="Zap" size={28} color="#3b1f6b" />
+                        </div>
+                        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8, color: "#606080" }}>
+                          {tab === "chat" ? "Start a conversation" : "Send a task"}
+                        </div>
+                        <div style={{ fontSize: 13, maxWidth: 300, lineHeight: 1.6 }}>
+                          {tab === "chat"
+                            ? "Select MCP connectors in the sidebar, then type your message below."
+                            : "Choose an agent, then describe what you need done."}
+                        </div>
+                        {tab === "task" && (
+                          <div style={{ marginTop: 10, fontSize: 12, color: "#2a2a3a" }}>
+                            Tasks automatically use all 19 MCP connectors.
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
                 )}
