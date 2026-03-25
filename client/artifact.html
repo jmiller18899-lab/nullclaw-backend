@@ -1,0 +1,575 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NullClaw Mission Control</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body, #root { margin: 0; padding: 0; height: 100%; }
+    body { background: #0d0d1a; font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; }
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #2a2a3e; border-radius: 3px; }
+    select option { background: #16162a; }
+    textarea { font-family: inherit; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useRef, useEffect, useCallback } = React;
+
+    // ── Icons (thin wrappers around lucide UMD) ────────────────────────────
+    function Icon({ name, size = 16, color, style }) {
+      const ref = useRef(null);
+      useEffect(() => {
+        if (ref.current && window.lucide) {
+          ref.current.innerHTML = "";
+          const el = window.lucide.createElement(window.lucide[name] || window.lucide.HelpCircle);
+          el.setAttribute("width", size);
+          el.setAttribute("height", size);
+          el.setAttribute("stroke", color || "currentColor");
+          el.setAttribute("stroke-width", "2");
+          el.setAttribute("fill", "none");
+          el.setAttribute("stroke-linecap", "round");
+          el.setAttribute("stroke-linejoin", "round");
+          if (style) Object.assign(el.style, style);
+          ref.current.appendChild(el);
+        }
+      }, [name, size, color]);
+      return <span ref={ref} style={{ display: "inline-flex", alignItems: "center", ...style }} />;
+    }
+
+    // ── Constants ──────────────────────────────────────────────────────────
+    const MCP_SERVERS = [
+      { name: "gmail",        url: "https://gmail.mcp.claude.com/mcp",                             description: "Send emails, read inbox, create drafts" },
+      { name: "gcal",         url: "https://gcal.mcp.claude.com/mcp",                              description: "Calendar events, scheduling" },
+      { name: "slack",        url: "https://mcp.slack.com/mcp",                                    description: "Send messages, read channels" },
+      { name: "notion",       url: "https://mcp.notion.com/mcp",                                   description: "Create pages, search databases" },
+      { name: "canva",        url: "https://mcp.canva.com/mcp",                                    description: "Create designs, manage brand kits" },
+      { name: "vercel",       url: "https://mcp.vercel.com",                                       description: "Check deployments, manage domains" },
+      { name: "supabase",     url: "https://mcp.supabase.com/mcp",                                 description: "Run SQL, manage databases" },
+      { name: "linear",       url: "https://mcp.linear.app/mcp",                                   description: "Create issues, manage projects" },
+      { name: "hubspot",      url: "https://mcp.hubspot.com/anthropic",                            description: "Manage contacts, deals, CRM" },
+      { name: "cloudflare",   url: "https://bindings.mcp.cloudflare.com/mcp",                      description: "Workers, KV, R2, DNS" },
+      { name: "netlify",      url: "https://netlify-mcp.netlify.app/mcp",                          description: "Deploy sites, manage builds" },
+      { name: "indeed",       url: "https://mcp.indeed.com/claude/mcp",                            description: "Search jobs, company data" },
+      { name: "context7",     url: "https://mcp.context7.com/mcp",                                 description: "Live docs for libraries & APIs" },
+      { name: "clawdy",       url: "https://clawdycloud.com",                                      description: "Custom Clawdy Cloud operations" },
+      { name: "superpowers",  url: "https://github.com/obra/superpowers",                          description: "Brainstorming, TDD, debugging" },
+      { name: "composio",     url: "https://github.com/ComposioHQ/awesome-claude-plugins",         description: "500+ external apps & services" },
+      { name: "agentteams",   url: "https://docs.anthropic.com",                                   description: "Spawn parallel Claude agents" },
+      { name: "skillcreator", url: "https://github.com/anthropics/claude-code/tree/main/plugins",  description: "Create custom SKILL.md files" },
+      { name: "ralphloop",    url: "https://github.com/anthropics/claude-code",                    description: "Autonomous iterative loop" },
+    ];
+
+    const AGENTS = [
+      { id: "chief",      label: "Chief of Staff",  color: "#7c3aed" },
+      { id: "engineer",   label: "Engineering",     color: "#0ea5e9" },
+      { id: "growth",     label: "Growth",          color: "#10b981" },
+      { id: "content",    label: "Content",         color: "#f59e0b" },
+      { id: "newsletter", label: "Newsletter",      color: "#ec4899" },
+      { id: "journal",    label: "Journal",         color: "#6366f1" },
+    ];
+
+    const MODELS = [
+      "claude-sonnet-4-20250514",
+      "claude-opus-4-20250514",
+      "claude-haiku-4-5-20251001",
+    ];
+
+    // ── Helpers ────────────────────────────────────────────────────────────
+    function extractText(content) {
+      if (!content) return "";
+      if (typeof content === "string") return content;
+      return content.filter(b => b.type === "text" && b.text).map(b => b.text).join("\n\n");
+    }
+
+    function readProxy() {
+      try { return localStorage.getItem("nullclaw_proxy_url") || ""; } catch { return ""; }
+    }
+    function writeProxy(v) {
+      try { localStorage.setItem("nullclaw_proxy_url", v); } catch {}
+    }
+
+    // ── MCP Panel ──────────────────────────────────────────────────────────
+    function McpPanel({ selected, onChange }) {
+      const [open, setOpen] = useState(false);
+      function toggle(name) {
+        const next = new Set(selected);
+        next.has(name) ? next.delete(name) : next.add(name);
+        onChange(next);
+      }
+      function toggleAll() {
+        onChange(selected.size === MCP_SERVERS.length ? new Set() : new Set(MCP_SERVERS.map(s => s.name)));
+      }
+      return (
+        <div style={{ borderTop: "1px solid #2a2a3a", marginTop: 8 }}>
+          <button onClick={() => setOpen(!open)} style={{
+            width: "100%", display: "flex", justifyContent: "space-between",
+            alignItems: "center", padding: "10px 16px", background: "none",
+            border: "none", color: "#a0a0c0", cursor: "pointer", fontSize: 13,
+          }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <Icon name="Zap" size={14} />
+              MCP ({selected.size}/{MCP_SERVERS.length})
+            </span>
+            <Icon name={open ? "ChevronUp" : "ChevronDown"} size={14} />
+          </button>
+          {open && (
+            <div style={{ padding: "0 12px 12px" }}>
+              <button onClick={toggleAll} style={{
+                fontSize: 11, color: "#7c3aed", background: "none", border: "none",
+                cursor: "pointer", marginBottom: 8, padding: "2px 4px",
+              }}>
+                {selected.size === MCP_SERVERS.length ? "Deselect all" : "Select all"}
+              </button>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+                {MCP_SERVERS.map(s => {
+                  const on = selected.has(s.name);
+                  return (
+                    <button key={s.name} onClick={() => toggle(s.name)} title={s.description} style={{
+                      display: "flex", alignItems: "center", gap: 6,
+                      padding: "5px 8px",
+                      background: on ? "#1a1a2e" : "transparent",
+                      border: `1px solid ${on ? "#7c3aed55" : "#2a2a3a"}`,
+                      borderRadius: 6, cursor: "pointer",
+                      color: on ? "#c4b5fd" : "#606080",
+                      fontSize: 12, textAlign: "left",
+                    }}>
+                      <Icon name={on ? "CheckSquare" : "Square"} size={12} />
+                      {s.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ── Chat Bubble ────────────────────────────────────────────────────────
+    function ChatBubble({ msg }) {
+      const isUser = msg.role === "user";
+      return (
+        <div style={{
+          display: "flex", flexDirection: "column",
+          alignItems: isUser ? "flex-end" : "flex-start",
+          marginBottom: 16,
+        }}>
+          {!isUser && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+              <Icon name="Bot" size={12} color="#7c3aed" />
+              <span style={{ fontSize: 11, color: "#606080" }}>
+                {msg.agent ? `${msg.agent} agent` : "assistant"}
+                {msg.model ? ` · ${msg.model.split("-").slice(1, 3).join("-")}` : ""}
+              </span>
+              {msg.mcpUsed && msg.mcpUsed.length > 0 && (
+                <span style={{ fontSize: 11, color: "#7c3aed" }}>
+                  · {msg.mcpUsed.join(", ")}
+                </span>
+              )}
+            </div>
+          )}
+          <div style={{
+            maxWidth: "80%", padding: "10px 14px",
+            borderRadius: isUser ? "14px 14px 4px 14px" : "14px 14px 14px 4px",
+            background: isUser ? "#3b1f6b" : msg.error ? "#3b1a1a" : "#16162a",
+            color: msg.error ? "#f87171" : "#e2e2f0",
+            fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word",
+            border: `1px solid ${isUser ? "#5a2d9a" : msg.error ? "#7f1d1d" : "#2a2a3e"}`,
+          }}>
+            {msg.content}
+          </div>
+        </div>
+      );
+    }
+
+    // ── Settings Panel ─────────────────────────────────────────────────────
+    function SettingsPanel({ proxyUrl, setProxyUrl, systemPrompt, setSystemPrompt, onSave }) {
+      return (
+        <div style={{ padding: 14, borderBottom: "1px solid #1e1e2e" }}>
+          <div style={{ fontSize: 11, color: "#606080", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.08em" }}>Settings</div>
+          <label style={{ fontSize: 12, color: "#a0a0c0", display: "block", marginBottom: 4 }}>Proxy URL</label>
+          <input
+            value={proxyUrl}
+            onChange={e => setProxyUrl(e.target.value)}
+            placeholder="https://your-proxy.railway.app"
+            style={{
+              width: "100%", padding: "6px 8px", background: "#16162a",
+              border: "1px solid #2a2a3e", borderRadius: 6, color: "#e2e2f0",
+              fontSize: 12, marginBottom: 8,
+            }}
+          />
+          <label style={{ fontSize: 12, color: "#a0a0c0", display: "block", marginBottom: 4 }}>System Prompt</label>
+          <textarea
+            value={systemPrompt}
+            onChange={e => setSystemPrompt(e.target.value)}
+            placeholder="Optional system prompt…"
+            rows={3}
+            style={{
+              width: "100%", padding: "6px 8px", background: "#16162a",
+              border: "1px solid #2a2a3e", borderRadius: 6, color: "#e2e2f0",
+              fontSize: 12, resize: "vertical", marginBottom: 8,
+            }}
+          />
+          <button onClick={onSave} style={{
+            width: "100%", padding: "7px", background: "#7c3aed",
+            border: "none", borderRadius: 6, color: "white",
+            fontSize: 12, cursor: "pointer", fontWeight: 600,
+          }}>
+            Save
+          </button>
+        </div>
+      );
+    }
+
+    // ── Main App ───────────────────────────────────────────────────────────
+    function MissionControl() {
+      const [tab, setTab] = useState("chat");
+      const [messages, setMessages] = useState([]);
+      const [input, setInput] = useState("");
+      const [loading, setLoading] = useState(false);
+      const [selectedMcp, setSelectedMcp] = useState(new Set());
+      const [selectedAgent, setSelectedAgent] = useState("chief");
+      const [model, setModel] = useState(MODELS[0]);
+      const [proxyUrl, setProxyUrl] = useState(readProxy);
+      const [showSettings, setShowSettings] = useState(false);
+      const [systemPrompt, setSystemPrompt] = useState("");
+      const bottomRef = useRef(null);
+      const textareaRef = useRef(null);
+
+      useEffect(() => {
+        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      }, [messages, loading]);
+
+      const base = proxyUrl.replace(/\/$/, "");
+
+      function saveSettings() {
+        writeProxy(proxyUrl);
+        setShowSettings(false);
+      }
+
+      async function sendChat() {
+        if (!input.trim() || loading) return;
+        const userMsg = { role: "user", content: input.trim() };
+        const history = [...messages, userMsg];
+        setMessages(history);
+        setInput("");
+        resetTextarea();
+        setLoading(true);
+        try {
+          const mcpList = Array.from(selectedMcp).map(n => {
+            const s = MCP_SERVERS.find(x => x.name === n);
+            return { name: s.name, url: s.url };
+          });
+          const res = await fetch(`${base}/api/messages`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              messages: history.map(m => ({ role: m.role, content: m.content })),
+              model,
+              system: systemPrompt || undefined,
+              mcp_servers: mcpList.length > 0 ? mcpList : undefined,
+            }),
+          });
+          const data = await res.json();
+          if (data.error) throw new Error(typeof data.error === "object" ? data.error.message : String(data.error));
+          const text = extractText(data.content);
+          setMessages([...history, {
+            role: "assistant", content: text || "(no text response)",
+            model: data.model, mcpUsed: data.mcp_servers_used,
+          }]);
+        } catch (err) {
+          setMessages([...history, { role: "assistant", content: String(err), error: true }]);
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      async function sendTask() {
+        if (!input.trim() || loading) return;
+        const task = input.trim();
+        setMessages(m => [...m, { role: "user", content: task }]);
+        setInput("");
+        resetTextarea();
+        setLoading(true);
+        try {
+          const res = await fetch(`${base}/api/task`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ task, agent: selectedAgent, model }),
+          });
+          const data = await res.json();
+          if (data.error) throw new Error(typeof data.error === "object" ? data.error.message : String(data.error));
+          const text = extractText(data.content);
+          setMessages(m => [...m, {
+            role: "assistant", content: text || "(no text response)",
+            agent: data.agent, model: data.model, mcpUsed: data.mcp_servers_used,
+          }]);
+        } catch (err) {
+          setMessages(m => [...m, { role: "assistant", content: String(err), error: true }]);
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      function handleSend() { tab === "chat" ? sendChat() : sendTask(); }
+
+      function handleKey(e) {
+        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
+      }
+
+      function resetTextarea() {
+        if (textareaRef.current) textareaRef.current.style.height = "auto";
+      }
+
+      function autoResize(e) {
+        e.target.style.height = "auto";
+        e.target.style.height = Math.min(e.target.scrollHeight, 160) + "px";
+      }
+
+      const agentColor = AGENTS.find(a => a.id === selectedAgent)?.color || "#7c3aed";
+
+      return (
+        <div style={{
+          display: "flex", flexDirection: "column", height: "100vh",
+          background: "#0d0d1a", color: "#e2e2f0",
+        }}>
+          {/* ── Header ── */}
+          <header style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            padding: "12px 20px", borderBottom: "1px solid #1e1e2e", flexShrink: 0,
+            background: "#0a0a16",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{
+                width: 28, height: 28, borderRadius: 8,
+                background: "linear-gradient(135deg, #7c3aed, #4f46e5)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}>
+                <Icon name="Zap" size={16} color="white" />
+              </div>
+              <span style={{ fontWeight: 700, fontSize: 16, letterSpacing: "-0.02em" }}>
+                NullClaw <span style={{ color: "#7c3aed" }}>Mission Control</span>
+              </span>
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {/* Tab switcher */}
+              <div style={{
+                display: "flex", background: "#1a1a2e", borderRadius: 8,
+                padding: 3, border: "1px solid #2a2a3e",
+              }}>
+                {["chat", "task"].map(t => (
+                  <button key={t} onClick={() => setTab(t)} style={{
+                    padding: "5px 14px", borderRadius: 6, border: "none", cursor: "pointer",
+                    background: tab === t ? "#7c3aed" : "transparent",
+                    color: tab === t ? "white" : "#606080",
+                    fontSize: 13, fontWeight: 500, display: "flex", alignItems: "center", gap: 5,
+                  }}>
+                    <Icon name={t === "chat" ? "MessageSquare" : "Bot"} size={12} />
+                    {t === "chat" ? "Chat" : "Task"}
+                  </button>
+                ))}
+              </div>
+
+              <button onClick={() => setShowSettings(!showSettings)} style={{
+                background: showSettings ? "#1a1a2e" : "none",
+                border: `1px solid ${showSettings ? "#7c3aed44" : "transparent"}`,
+                color: "#a0a0c0", cursor: "pointer", padding: 6, borderRadius: 8,
+                display: "flex", alignItems: "center",
+              }}>
+                <Icon name="Settings" size={16} />
+              </button>
+
+              {messages.length > 0 && (
+                <button onClick={() => setMessages([])} title="Clear chat" style={{
+                  background: "none", border: "1px solid transparent",
+                  color: "#606080", cursor: "pointer", padding: 6, borderRadius: 8,
+                  display: "flex", alignItems: "center",
+                }}>
+                  <Icon name="RotateCcw" size={16} />
+                </button>
+              )}
+            </div>
+          </header>
+
+          <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+            {/* ── Sidebar ── */}
+            <aside style={{
+              width: 220, borderRight: "1px solid #1e1e2e", flexShrink: 0,
+              display: "flex", flexDirection: "column", overflowY: "auto",
+              background: "#0a0a16",
+            }}>
+              {showSettings && (
+                <SettingsPanel
+                  proxyUrl={proxyUrl} setProxyUrl={setProxyUrl}
+                  systemPrompt={systemPrompt} setSystemPrompt={setSystemPrompt}
+                  onSave={saveSettings}
+                />
+              )}
+
+              {/* Model */}
+              <div style={{ padding: "12px 16px", borderBottom: "1px solid #1e1e2e" }}>
+                <div style={{ fontSize: 11, color: "#606080", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.08em" }}>Model</div>
+                <select value={model} onChange={e => setModel(e.target.value)} style={{
+                  width: "100%", padding: "6px 8px", background: "#16162a",
+                  border: "1px solid #2a2a3e", borderRadius: 6, color: "#e2e2f0",
+                  fontSize: 12, cursor: "pointer",
+                }}>
+                  {MODELS.map(m => (
+                    <option key={m} value={m}>{m.split("-").slice(1, 3).join("-")}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Agent (task mode) */}
+              {tab === "task" && (
+                <div style={{ padding: "12px 16px", borderBottom: "1px solid #1e1e2e" }}>
+                  <div style={{ fontSize: 11, color: "#606080", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.08em" }}>Agent</div>
+                  {AGENTS.map(a => (
+                    <button key={a.id} onClick={() => setSelectedAgent(a.id)} style={{
+                      display: "flex", alignItems: "center", gap: 8, width: "100%",
+                      padding: "6px 8px", marginBottom: 3,
+                      background: selectedAgent === a.id ? "#1a1a2e" : "none",
+                      border: `1px solid ${selectedAgent === a.id ? a.color + "55" : "transparent"}`,
+                      borderRadius: 6, cursor: "pointer",
+                      color: selectedAgent === a.id ? "#e2e2f0" : "#606080",
+                      fontSize: 12, textAlign: "left",
+                    }}>
+                      <span style={{ width: 8, height: 8, borderRadius: "50%", background: a.color, flexShrink: 0 }} />
+                      {a.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* MCP (chat mode) */}
+              {tab === "chat" && (
+                <McpPanel selected={selectedMcp} onChange={setSelectedMcp} />
+              )}
+            </aside>
+
+            {/* ── Messages ── */}
+            <main style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+              <div style={{ flex: 1, overflowY: "auto", padding: "20px 24px" }}>
+                {messages.length === 0 && (
+                  <div style={{
+                    display: "flex", flexDirection: "column", alignItems: "center",
+                    justifyContent: "center", height: "100%", color: "#40405a", textAlign: "center",
+                  }}>
+                    <div style={{
+                      width: 56, height: 56, borderRadius: 16, marginBottom: 16,
+                      background: "linear-gradient(135deg, #1a0a3e, #0a0a20)",
+                      border: "1px solid #2a1a5e",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                    }}>
+                      <Icon name="Zap" size={28} color="#3b1f6b" />
+                    </div>
+                    <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8, color: "#606080" }}>
+                      {tab === "chat" ? "Start a conversation" : "Send a task"}
+                    </div>
+                    <div style={{ fontSize: 13, maxWidth: 300, lineHeight: 1.6 }}>
+                      {tab === "chat"
+                        ? "Select MCP connectors in the sidebar, then type your message below."
+                        : "Choose an agent, then describe what you need done."}
+                    </div>
+                    {tab === "task" && (
+                      <div style={{ marginTop: 10, fontSize: 12, color: "#2a2a3a" }}>
+                        Tasks automatically use all 19 MCP connectors.
+                      </div>
+                    )}
+                    {!proxyUrl && (
+                      <div style={{
+                        marginTop: 16, padding: "10px 14px", borderRadius: 8,
+                        background: "#1a0a0a", border: "1px solid #5a1a1a",
+                        fontSize: 12, color: "#f87171", maxWidth: 280,
+                      }}>
+                        ⚠ No proxy URL set. Open Settings and paste your Railway URL.
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {messages.map((msg, i) => <ChatBubble key={i} msg={msg} />)}
+
+                {loading && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#606080", fontSize: 13 }}>
+                    <Icon name="RotateCcw" size={14} style={{ animation: "spin 1s linear infinite" }} />
+                    Thinking…
+                  </div>
+                )}
+                <div ref={bottomRef} />
+              </div>
+
+              {/* ── Input ── */}
+              <div style={{
+                padding: "12px 20px 16px", borderTop: "1px solid #1e1e2e",
+                background: "#0a0a16", flexShrink: 0,
+              }}>
+                <div style={{
+                  display: "flex", gap: 10, alignItems: "flex-end",
+                  background: "#16162a", borderRadius: 12,
+                  border: "1px solid #2a2a3e", padding: "8px 12px",
+                }}>
+                  <textarea
+                    ref={textareaRef}
+                    value={input}
+                    onChange={e => setInput(e.target.value)}
+                    onKeyDown={handleKey}
+                    onInput={autoResize}
+                    placeholder={tab === "chat"
+                      ? "Message… (Enter to send, Shift+Enter for newline)"
+                      : "Describe your task… (Enter to send)"}
+                    rows={1}
+                    disabled={loading}
+                    style={{
+                      flex: 1, background: "none", border: "none", outline: "none",
+                      color: "#e2e2f0", fontSize: 14, resize: "none", lineHeight: 1.5,
+                      maxHeight: 160, overflowY: "auto", paddingTop: 2,
+                    }}
+                  />
+                  <button
+                    onClick={handleSend}
+                    disabled={loading || !input.trim()}
+                    style={{
+                      background: loading || !input.trim() ? "#2a2a3e" : "#7c3aed",
+                      border: "none", borderRadius: 8, color: "white",
+                      cursor: loading || !input.trim() ? "not-allowed" : "pointer",
+                      padding: "8px 10px", display: "flex", alignItems: "center", flexShrink: 0,
+                      transition: "background 0.15s",
+                    }}
+                  >
+                    <Icon name="Send" size={16} color="white" />
+                  </button>
+                </div>
+
+                <div style={{ fontSize: 11, color: "#303050", marginTop: 6, textAlign: "center" }}>
+                  {tab === "chat" && selectedMcp.size > 0
+                    ? `${selectedMcp.size} MCP connector${selectedMcp.size !== 1 ? "s" : ""} active`
+                    : tab === "task"
+                    ? `${AGENTS.find(a => a.id === selectedAgent)?.label || "Chief"} · All 19 MCP connectors`
+                    : "No MCP connectors selected · open sidebar to enable"}
+                </div>
+              </div>
+            </main>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(
+      <React.StrictMode><MissionControl /></React.StrictMode>
+    );
+  </script>
+</body>
+</html>
