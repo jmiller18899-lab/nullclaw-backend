@@ -98,9 +98,15 @@
     function writeProxy(v) {
       try { localStorage.setItem("nullclaw_proxy_url", v); } catch {}
     }
+    function readTokens() {
+      try { return JSON.parse(localStorage.getItem("nullclaw_mcp_tokens") || "{}"); } catch { return {}; }
+    }
+    function writeTokens(t) {
+      try { localStorage.setItem("nullclaw_mcp_tokens", JSON.stringify(t)); } catch {}
+    }
 
     // ── MCP Panel ──────────────────────────────────────────────────────────
-    function McpPanel({ selected, onChange }) {
+    function McpPanel({ selected, onChange, tokens, onTokenChange }) {
       const [open, setOpen] = useState(false);
       function toggle(name) {
         const next = new Set(selected);
@@ -110,6 +116,7 @@
       function toggleAll() {
         onChange(selected.size === MCP_SERVERS.length ? new Set() : new Set(MCP_SERVERS.map(s => s.name)));
       }
+      const authed = Array.from(selected).filter(n => tokens[n]).length;
       return (
         <div style={{ borderTop: "1px solid #2a2a3a", marginTop: 8 }}>
           <button onClick={() => setOpen(!open)} style={{
@@ -120,6 +127,11 @@
             <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <Icon name="Zap" size={14} />
               MCP ({selected.size}/{MCP_SERVERS.length})
+              {selected.size > 0 && (
+                <span style={{ fontSize: 10, color: authed === selected.size ? "#10b981" : "#f59e0b" }}>
+                  {authed}/{selected.size} auth'd
+                </span>
+              )}
             </span>
             <Icon name={open ? "ChevronUp" : "ChevronDown"} size={14} />
           </button>
@@ -131,22 +143,43 @@
               }}>
                 {selected.size === MCP_SERVERS.length ? "Deselect all" : "Select all"}
               </button>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 {MCP_SERVERS.map(s => {
                   const on = selected.has(s.name);
+                  const tok = tokens[s.name] || "";
                   return (
-                    <button key={s.name} onClick={() => toggle(s.name)} title={s.description} style={{
-                      display: "flex", alignItems: "center", gap: 6,
-                      padding: "5px 8px",
-                      background: on ? "#1a1a2e" : "transparent",
-                      border: `1px solid ${on ? "#7c3aed55" : "#2a2a3a"}`,
-                      borderRadius: 6, cursor: "pointer",
-                      color: on ? "#c4b5fd" : "#606080",
-                      fontSize: 12, textAlign: "left",
-                    }}>
-                      <Icon name={on ? "CheckSquare" : "Square"} size={12} />
-                      {s.name}
-                    </button>
+                    <div key={s.name}>
+                      <button onClick={() => toggle(s.name)} title={s.description} style={{
+                        display: "flex", alignItems: "center", gap: 6, width: "100%",
+                        padding: "5px 8px",
+                        background: on ? "#1a1a2e" : "transparent",
+                        border: `1px solid ${on ? (tok ? "#10b98155" : "#7c3aed55") : "#2a2a3a"}`,
+                        borderRadius: on ? "6px 6px 0 0" : 6,
+                        cursor: "pointer",
+                        color: on ? "#c4b5fd" : "#606080",
+                        fontSize: 12, textAlign: "left",
+                      }}>
+                        <Icon name={on ? "CheckSquare" : "Square"} size={12} />
+                        <span style={{ flex: 1 }}>{s.name}</span>
+                        {on && tok && <span style={{ fontSize: 10, color: "#10b981" }}>✓</span>}
+                      </button>
+                      {on && (
+                        <input
+                          value={tok}
+                          onChange={e => onTokenChange(s.name, e.target.value)}
+                          placeholder={`Bearer token for ${s.name}…`}
+                          type="password"
+                          style={{
+                            width: "100%", padding: "4px 8px",
+                            background: "#0d0d1a",
+                            border: "1px solid #7c3aed33", borderTop: "none",
+                            borderRadius: "0 0 6px 6px",
+                            color: "#a0a0c0", fontSize: 11,
+                            outline: "none", boxSizing: "border-box",
+                          }}
+                        />
+                      )}
+                    </div>
                   );
                 })}
               </div>
@@ -239,6 +272,7 @@
       const [input, setInput] = useState("");
       const [loading, setLoading] = useState(false);
       const [selectedMcp, setSelectedMcp] = useState(new Set());
+      const [mcpTokens, setMcpTokens] = useState(readTokens);
       const [selectedAgent, setSelectedAgent] = useState("chief");
       const [model, setModel] = useState(MODELS[0]);
       const [proxyUrl, setProxyUrl] = useState(readProxy);
@@ -269,7 +303,9 @@
         try {
           const mcpList = Array.from(selectedMcp).map(n => {
             const s = MCP_SERVERS.find(x => x.name === n);
-            return { name: s.name, url: s.url };
+            const entry = { name: s.name, url: s.url };
+            if (mcpTokens[n]) entry.authorization_token = mcpTokens[n];
+            return entry;
           });
           const res = await fetch(`${base}/api/messages`, {
             method: "POST",
@@ -455,7 +491,16 @@
 
               {/* MCP (chat mode) */}
               {tab === "chat" && (
-                <McpPanel selected={selectedMcp} onChange={setSelectedMcp} />
+                <McpPanel
+                  selected={selectedMcp}
+                  onChange={setSelectedMcp}
+                  tokens={mcpTokens}
+                  onTokenChange={(name, val) => {
+                    const next = { ...mcpTokens, [name]: val };
+                    setMcpTokens(next);
+                    writeTokens(next);
+                  }}
+                />
               )}
             </aside>
 

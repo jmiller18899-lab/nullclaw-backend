@@ -103,7 +103,11 @@ app.post("/api/messages", async (req, res) => {
   const { messages, model, max_tokens, system, mcp_servers } = req.body || {};
   if (!messages || !Array.isArray(messages)) return res.status(400).json({ error: "Missing messages array" });
 
-  const mcpList = (mcp_servers || []).map(s => ({ type: "url", url: s.url, name: s.name }));
+  const mcpList = (mcp_servers || []).map(s => {
+    const entry = { type: "url", url: s.url, name: s.name };
+    if (s.authorization_token) entry.authorization_token = s.authorization_token;
+    return entry;
+  });
   console.log("[api/messages] " + messages.length + " msgs, mcp=" + mcpList.length);
 
   try {
