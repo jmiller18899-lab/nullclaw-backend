@@ -10,7 +10,7 @@ const DEFAULT_MODEL = process.env.DEFAULT_MODEL || "claude-sonnet-4-20250514";
 const AIS_ENDPOINT = process.env.AIS_ENDPOINT || "https://ais-dev-7xnr44njbt4rpm3lehtujx-7265454192.us-west2.run.app";
 
 app.set("trust proxy", 1);
-app.use(cors({ origin: true, methods: ["GET", "POST", "OPTIONS"], allowedHeaders: ["Content-Type", "Authorization"] }));
+app.use(cors({ origin: true, methods: ["GET", "POST", "OPTIONS"], allowedHeaders: ["Content-Type", "Authorization", "x-ic-url"] }));
 app.use(express.json({ limit: "2mb" }));
 
 const MCP_DESCRIPTIONS = {
