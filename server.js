@@ -215,6 +215,7 @@ app.post('/api/hermes', async (req, res) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req.body),
+      signal: AbortSignal.timeout(310000), // 5min 10s — matches Hermes server timeout
     });
     const rawText = await response.text();
     res.status(response.status);
