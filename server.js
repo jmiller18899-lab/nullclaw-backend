@@ -207,6 +207,25 @@ app.get("/", (_, res) => res.json({
   mcp_support: true, mcp_connectors: 19,
 }));
 
+// ─── Hermes proxy: /api/hermes → Hermes /v1/chat/completions ──
+app.post('/api/hermes', async (req, res) => {
+  const hermesUrl = req.headers['x-ic-url'] || 'https://hermes-agent-production-61e5.up.railway.app';
+  try {
+    const response = await fetch(hermesUrl.replace(/\/$/, '') + '/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+    });
+    const rawText = await response.text();
+    res.status(response.status);
+    res.setHeader('Content-Type', 'application/json');
+    res.send(rawText);
+  } catch (err) {
+    console.error('[hermes-proxy] Fetch error:', err.message);
+    res.status(502).json({ error: `Hermes proxy failed: ${err.message}` });
+  }
+});
+
 app.listen(PORT, () => {
   console.log("[nullclaw-proxy] v3.1.0 on port " + PORT);
   console.log("[nullclaw-proxy] AIS_ENDPOINT: " + AIS_ENDPOINT);
