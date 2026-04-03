@@ -227,6 +227,34 @@ app.post('/api/hermes', async (req, res) => {
   }
 });
 
+// ─── Shared Agent Memory ──────────────────────────────────────
+const agentMemory = [];  // [{ agent, task, summary, ts }]
+const MAX_MEMORY = 50;
+
+// Write a memory entry
+app.post('/api/memory/write', (req, res) => {
+  const { agent, task, summary } = req.body;
+  if (!agent || !summary) return res.status(400).json({ error: 'agent and summary required' });
+  agentMemory.unshift({ agent, task: task || '', summary, ts: new Date().toISOString() });
+  if (agentMemory.length > MAX_MEMORY) agentMemory.splice(MAX_MEMORY);
+  res.json({ ok: true, count: agentMemory.length });
+});
+
+// Read memory — optionally filter by agent
+app.get('/api/memory/read', (req, res) => {
+  const { agent, limit } = req.query;
+  let entries = agentMemory;
+  if (agent) entries = entries.filter(e => e.agent === agent);
+  if (limit) entries = entries.slice(0, parseInt(limit) || 10);
+  res.json({ entries, total: agentMemory.length });
+});
+
+// Clear memory
+app.delete('/api/memory/clear', (req, res) => {
+  agentMemory.length = 0;
+  res.json({ ok: true });
+});
+
 app.listen(PORT, () => {
   console.log("[nullclaw-proxy] v3.1.0 on port " + PORT);
   console.log("[nullclaw-proxy] AIS_ENDPOINT: " + AIS_ENDPOINT);
