@@ -208,22 +208,33 @@ app.get("/", (_, res) => res.json({
 }));
 
 // ─── Hermes proxy: /api/hermes → Hermes /v1/chat/completions ──
+// Uses chunked transfer to keep Railway connection alive during long Hermes responses
 app.post('/api/hermes', async (req, res) => {
   const hermesUrl = req.headers['x-ic-url'] || 'https://hermes-agent-production-61e5.up.railway.app';
+  
+  // Set headers immediately and start chunked transfer to prevent Railway 60s gateway timeout
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Transfer-Encoding', 'chunked');
+  res.setHeader('X-Accel-Buffering', 'no'); // disable nginx buffering
+  
+  // Send a space every 15s to keep the connection alive
+  const keepAlive = setInterval(() => { try { res.write(' '); } catch {} }, 15000);
+  
   try {
     const response = await fetch(hermesUrl.replace(/\/$/, '') + '/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req.body),
-      signal: AbortSignal.timeout(310000), // 5min 10s — matches Hermes server timeout
+      signal: AbortSignal.timeout(310000),
     });
     const rawText = await response.text();
+    clearInterval(keepAlive);
     res.status(response.status);
-    res.setHeader('Content-Type', 'application/json');
-    res.send(rawText);
+    res.end(rawText);
   } catch (err) {
+    clearInterval(keepAlive);
     console.error('[hermes-proxy] Fetch error:', err.message);
-    res.status(502).json({ error: `Hermes proxy failed: ${err.message}` });
+    res.end(JSON.stringify({ error: `Hermes proxy failed: ${err.message}` }));
   }
 });
 
